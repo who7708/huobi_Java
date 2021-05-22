@@ -38,7 +38,8 @@ public class MarketClientExample {
 
     MarketClient marketClient = MarketClient.create(new HuobiOptions());
 
-    String symbol = "btcusdt";
+    // String symbol = "btcusdt";
+    String symbol = "newusdt";
 
     List<Candlestick> list = marketClient.getCandlestick(CandlestickRequest.builder()
         .symbol(symbol)
