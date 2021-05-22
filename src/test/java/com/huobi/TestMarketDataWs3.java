@@ -191,13 +191,20 @@ public class TestMarketDataWs3 {
         System.out.println("===== test5 =====");
         // String symbol = "nsureusdt";
 
-        // List<String> symbols = Lists.newArrayList(
-        //         "nsureusdt"
-        //         , "newusdt"
-        //         , "shibusdt"
-        // );
+        List<String> symbols = Lists.newArrayList(
+                "nsureusdt"
+                , "newusdt"
+                , "paiusdt"
+                , "datusdt"
+                , "yeeusdt"
+                , "ogousdt"
+                , "ocnusdt"
+                , "gnxusdt"
+                , "cmtusdt"
+                , "shibusdt"
+        );
 
-        final Set<String> symbols = getSymbolSet();
+        // final Set<String> symbols = getSymbolSet();
 
         final List<MarketTicker> tickers = getTickers();
         final Map<String, MarketTicker> tickerMap = tickers.stream()
@@ -205,20 +212,7 @@ public class TestMarketDataWs3 {
                 .collect(Collectors.toMap(MarketTicker::getSymbol, ticker -> ticker));
         tickerMap.forEach((symbol, marketTicker) ->
                 marketClient.subMarketDetail(SubMarketDetailRequest.builder().symbol(symbol).build(), marketDetailEvent -> {
-                    final MarketDetail marketDetail = marketDetailEvent.getDetail();
-                    // MarketDetail marketDetail = marketClient.getMarketDetail(MarketDetailRequest.builder()
-                    //         .symbol(marketTicker.getSymbol()).build());
-                    // 当前涨幅
-                    // log.info("thread {}", Thread.currentThread());
-                    final BigDecimal change = this.cal(marketTicker.getOpen(), marketDetail.getClose());
-                    Increment increment = Increment.builder()
-                            .symbol(marketTicker.getSymbol())
-                            .open(marketTicker.getOpen())
-                            .close(marketDetail.getClose())
-                            .low(marketDetail.getLow())
-                            .high(marketDetail.getHigh())
-                            .change(change)
-                            .build();
+                    final Increment increment = getIncrement(marketTicker);
                     printTable(Lists.newArrayList(increment), true);
                 }));
 
@@ -242,9 +236,9 @@ public class TestMarketDataWs3 {
         tableElement.leftCellPadding(1).rightCellPadding(1);
 
         // 设置header
-        if (headers) {
+        // if (!headers) {
             tableElement.row(true, fields);
-        }
+        // }
 
         // 设置cell里的元素超出了处理方式，Overflow.HIDDEN 表示隐藏
         // Overflow.WRAP表示会向外面排出去，即当输出宽度有限时，右边的列可能会显示不出，被挤掉了
@@ -267,8 +261,8 @@ public class TestMarketDataWs3 {
         }
 
         // 默认输出宽度是80
-        System.err.println(RenderUtil.render(tableElement, 120));
-        // log.info("涨幅榜：\n" + RenderUtil.render(tableElement, 120));
+        // System.err.println(RenderUtil.render(tableElement, 120));
+        log.info("涨幅榜：\n" + RenderUtil.render(tableElement, 120));
         // final List<String> symbols = increments.stream().map(Increment::getSymbol).limit(10).collect(Collectors.toList());
         // log.info("top 10 symbols {}", JSON.toJSONString(symbols));
     }
