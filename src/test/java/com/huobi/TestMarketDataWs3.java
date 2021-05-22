@@ -2,9 +2,11 @@ package com.huobi;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.TypeReference;
+import com.google.common.collect.Lists;
 import com.huobi.client.GenericClient;
 import com.huobi.client.MarketClient;
 import com.huobi.client.req.market.MarketDetailRequest;
+import com.huobi.client.req.market.SubMarketDetailRequest;
 import com.huobi.constant.HuobiOptions;
 import com.huobi.model.generic.Symbol;
 import com.huobi.model.market.Candlestick;
@@ -23,18 +25,21 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.time.FastDateFormat;
 import org.junit.Test;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -44,35 +49,65 @@ import java.util.stream.Collectors;
  * @since 2021/05/22
  */
 @Slf4j
-public class TestMarketDataWs2 {
-    MarketClient marketClient = MarketClient.create(new HuobiOptions());
-    GenericClient genericService = GenericClient.create(HuobiOptions.builder().build());
-    String symbol = "btcusdt";
-    // String symbol = "newusdt";
+public class TestMarketDataWs3 {
+    private static final MarketClient marketClient = MarketClient.create(new HuobiOptions());
+    private static final GenericClient genericService = GenericClient.create(HuobiOptions.builder().build());
     private static final String QUOTE_CURRENCY = "usdt";
 
     @Test
     public void readFile() throws IOException {
         System.out.println("===== readFile =====");
-        final String path = this.getClass().getResource("/symbols-20200522.json").getPath();
-        final File file = new File(path);
-        log.info("file exists {}", file.exists());
-        final String json = FileUtils.readFileToString(file, StandardCharsets.UTF_8);
+        // final List<Symbol> symbols = getSymbols();
+        // System.out.println(symbols);
+        final List<MarketTicker> tickers = getTickers();
+        System.out.println(tickers);
     }
 
-    @Test
-    public void test1() throws InterruptedException, IOException {
-
+    /**
+     * 获取交易对
+     */
+    private List<Symbol> getSymbols() throws IOException {
+        final String date = FastDateFormat.getInstance("yyyyMMdd").format(new Date());
+        String filepath = System.getProperty("user.dir") + "/src/test/resources/symbols-" + date + ".json";
+        log.info("file path {}", filepath);
         // 交易对
-        final InputStream symbolInputStream = this.getClass().getResourceAsStream("/symbols-20200522.json");
-        assert symbolInputStream != null;
-        final String symbolsJson = IOUtils.toString(symbolInputStream, StandardCharsets.UTF_8);
-        // final String symbolsJson = FileUtils.readFileToString(new File(symbolPath), StandardCharsets.UTF_8);
-        final List<Symbol> symbols = JSON.parseObject(symbolsJson, new TypeReference<List<Symbol>>() {
-        }.getType());
+        final File file = new File(filepath);
+        // final InputStream symbolInputStream = this.getClass().getResourceAsStream(filepath);
+        if (file.exists()) {
+            final String symbolsJson = FileUtils.readFileToString(file, StandardCharsets.UTF_8);
+            return JSON.parseObject(symbolsJson, new TypeReference<List<Symbol>>() {
+            }.getType());
+        }
+        final List<Symbol> symbols = genericService.getSymbols();
+        FileUtils.writeStringToFile(new File(filepath), JSON.toJSONString(symbols), StandardCharsets.UTF_8);
+        return symbols;
+    }
 
+    /**
+     * 获取交易对的最新tickers
+     *
+     * 主要是获取今日的开盘价 open
+     */
+    private List<MarketTicker> getTickers() throws IOException {
+        final String date = FastDateFormat.getInstance("yyyyMMdd").format(new Date());
+        String filepath = System.getProperty("user.dir") + "/src/test/resources/tickers-" + date + ".json";
+        log.info("file path {}", filepath);
+        // 交易对
+        final File file = new File(filepath);
+        if (file.exists()) {
+            final String tickerJson = FileUtils.readFileToString(file, StandardCharsets.UTF_8);
+            return JSON.parseObject(tickerJson, new TypeReference<List<MarketTicker>>() {
+            }.getType());
+        }
+        final List<MarketTicker> tickers = marketClient.getTickers();
+        FileUtils.writeStringToFile(new File(filepath), JSON.toJSONString(tickers), StandardCharsets.UTF_8);
+        return tickers;
+    }
+
+    private Set<String> getSymbolSet() throws IOException {
+        final List<Symbol> symbols = getSymbols();
         // ["btcusdt","newusdt",...]
-        final Set<String> symbolSet = symbols.stream()
+        return symbols.stream()
                 .sorted(Comparator.comparing(Symbol::getQuoteCurrency))
                 // 过滤 usdt 币种对应的交易对
                 .filter(s -> StringUtils.equalsIgnoreCase(QUOTE_CURRENCY, s.getQuoteCurrency()))
@@ -80,73 +115,117 @@ public class TestMarketDataWs2 {
                 // 聚合 usdt 交易对
                 .map(Symbol::getSymbol)
                 .collect(Collectors.toSet());
+    }
 
+    private Increment getIncrement(MarketTicker marketTicker) {
+        MarketDetail marketDetail = marketClient.getMarketDetail(MarketDetailRequest.builder()
+                .symbol(marketTicker.getSymbol()).build());
+        // 当前涨幅
+        // log.info("thread {}", Thread.currentThread());
+        final BigDecimal change = this.cal(marketTicker.getOpen(), marketDetail.getClose());
+        return Increment.builder()
+                .symbol(marketTicker.getSymbol())
+                .open(marketTicker.getOpen())
+                .close(marketDetail.getClose())
+                .low(marketDetail.getLow())
+                .high(marketDetail.getHigh())
+                .change(change)
+                .build();
+    }
+
+    @Test
+    public void topN() throws IOException, InterruptedException {
+        final Set<String> symbolSet = getSymbolSet();
         // 最新
         // final List<MarketTicker> tickers = marketClient.getTickers();
-
-        final InputStream tickerInputStream = this.getClass().getResourceAsStream("/tickers-20200522.json");
-        assert tickerInputStream != null;
-        final String tickerJson = IOUtils.toString(tickerInputStream, StandardCharsets.UTF_8);
-        // final String tickerJson = FileUtils.readFileToString(tickerInputStream, StandardCharsets.UTF_8);
-        final List<MarketTicker> tickers = JSON.parseObject(tickerJson, new TypeReference<List<MarketTicker>>() {
-        }.getType());
+        final List<MarketTicker> tickers = getTickers();
 
         final List<MarketTicker> newTickers = tickers.stream()
                 .filter(marketTicker -> symbolSet.contains(marketTicker.getSymbol()))
                 .filter(marketTicker -> marketTicker.getOpen().compareTo(new BigDecimal("0.1")) <= 0)
                 .collect(Collectors.toList());
 
-        // final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
-        // scheduledExecutorService.scheduleAtFixedRate(() -> {
-        //     MarketDetail marketDetail = marketClient.getMarketDetail(MarketDetailRequest.builder().symbol(symbol).build());
-        //     log.info(marketDetail);
-        //     // cal(marketDetailMerged.getOpen(), marketDetailMerged.getClose());
-        //     // cal(marketDetailMerged.getLow(), marketDetailMerged.getHigh());
-        //
-        //     // (1 + 涨幅)x = 0.001085
-        //     cal(marketDetail.getLow(), marketDetail.getClose());
-        //
-        // }, 0, 1000L, TimeUnit.MILLISECONDS);
-
         // 涨幅榜
         final List<Increment> increments = Flowable.fromIterable(newTickers).parallel()
                 .runOn(Schedulers.io())
                 .flatMap(
-                        marketTicker -> Flowable.fromCallable(() -> {
-                            // MarketDetailMerged marketDetailMerged = marketClient.getMarketDetailMerged(MarketDetailMergedRequest.builder()
-                            //         .symbol(marketTicker.getSymbol()).build());
-                            MarketDetail marketDetail = marketClient.getMarketDetail(MarketDetailRequest.builder()
-                                    .symbol(marketTicker.getSymbol()).build());
-                            // 当前涨幅
-                            // log.info("thread {}", Thread.currentThread());
-                            final BigDecimal change = this.cal(marketTicker.getOpen(), marketDetail.getClose());
-                            return Increment.builder()
-                                    .symbol(marketTicker.getSymbol())
-                                    .open(marketTicker.getOpen())
-                                    .close(marketDetail.getClose())
-                                    .low(marketDetail.getLow())
-                                    .high(marketDetail.getHigh())
-                                    .change(change)
-                                    .build();
-                        })//.observeOn(Schedulers.newThread())
+                        marketTicker -> Flowable.fromCallable(() -> getIncrement(marketTicker))//.observeOn(Schedulers.newThread())
                 )
                 // .groupBy()
                 .toSortedList((increment1, increment2) -> increment2.getChange().compareTo(increment1.getChange()))
                 .blockingSingle();//.stream().limit(10).collect(Collectors.toList());
 
-        // marketClient.subMarketDetail(SubMarketDetailRequest.builder().symbol(symbol).build(), (marketDetailEvent) -> {
-        //     // log.info(marketDetailEvent.toString());
-        //     final MarketDetail marketDetail = marketDetailEvent.getDetail();
-        //     log.info(marketDetail);
-        //     // (1 + 涨幅)x = 0.001085
-        //     // cal(marketDetail.getOpen(), marketDetail.getClose());
-        // });
-        printTable(increments, QUOTE_CURRENCY);
+        printTable(increments, true);
+
+        // 监听 top 10 的数据变化
+        final Set<String> symbols = increments.stream().limit(10).map(Increment::getSymbol).collect(Collectors.toSet());
+        final Map<String, MarketTicker> tickerMap = tickers.stream()
+                .filter(ticker -> symbols.contains(ticker.getSymbol()))
+                .collect(Collectors.toMap(MarketTicker::getSymbol, ticker -> ticker));
+        tickerMap.forEach((symbol, marketTicker) ->
+                marketClient.subMarketDetail(SubMarketDetailRequest.builder().symbol(symbol).build(), marketDetailEvent -> {
+                    final Increment increment = getIncrement(marketTicker);
+                    printTable(Lists.newArrayList(increment), true);
+                }));
 
         TimeUnit.MINUTES.sleep(10);
     }
 
-    private void printTable(List<Increment> increments, String baseCurrent) {
+    @Test
+    public void test4() throws InterruptedException {
+        System.out.println("===== test3 =====");
+        final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
+        scheduledExecutorService.scheduleAtFixedRate(() -> {
+            try {
+                topN();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }, 0, 1000L, TimeUnit.MILLISECONDS);
+
+        TimeUnit.MINUTES.sleep(10);
+    }
+
+    @Test
+    public void test5() throws IOException, InterruptedException {
+        System.out.println("===== test5 =====");
+        // String symbol = "nsureusdt";
+
+        // List<String> symbols = Lists.newArrayList(
+        //         "nsureusdt"
+        //         , "newusdt"
+        //         , "shibusdt"
+        // );
+
+        final Set<String> symbols = getSymbolSet();
+
+        final List<MarketTicker> tickers = getTickers();
+        final Map<String, MarketTicker> tickerMap = tickers.stream()
+                .filter(ticker -> symbols.contains(ticker.getSymbol()))
+                .collect(Collectors.toMap(MarketTicker::getSymbol, ticker -> ticker));
+        tickerMap.forEach((symbol, marketTicker) ->
+                marketClient.subMarketDetail(SubMarketDetailRequest.builder().symbol(symbol).build(), marketDetailEvent -> {
+                    final MarketDetail marketDetail = marketDetailEvent.getDetail();
+                    // MarketDetail marketDetail = marketClient.getMarketDetail(MarketDetailRequest.builder()
+                    //         .symbol(marketTicker.getSymbol()).build());
+                    // 当前涨幅
+                    // log.info("thread {}", Thread.currentThread());
+                    final BigDecimal change = this.cal(marketTicker.getOpen(), marketDetail.getClose());
+                    Increment increment = Increment.builder()
+                            .symbol(marketTicker.getSymbol())
+                            .open(marketTicker.getOpen())
+                            .close(marketDetail.getClose())
+                            .low(marketDetail.getLow())
+                            .high(marketDetail.getHigh())
+                            .change(change)
+                            .build();
+                    printTable(Lists.newArrayList(increment), true);
+                }));
+
+        TimeUnit.MINUTES.sleep(10);
+    }
+
+    private void printTable(List<Increment> increments, boolean headers) {
         // header定义
         // String[] fields = {"币种", "涨幅", "开盘价", "收盘价", "最高价", "最低价"};
         String[] fields = {"Currency", "Change", "Open", "Close", "High", "Low"};
@@ -155,13 +234,17 @@ public class TestMarketDataWs2 {
         // 设置table的外部边框，默认是没有外边框
         // 还有内部的分隔线，默认内部没有分隔线
         // TableElement tableElement = new TableElement(1, 1).border(BorderStyle.DASHED).separator(BorderStyle.DASHED);
-        TableElement tableElement = new TableElement(1, 1, 1, 1, 1, 1).border(BorderStyle.DASHED).separator(BorderStyle.DASHED);
+        TableElement tableElement = new TableElement(1, 1, 1, 1, 1, 1)
+                // .border(BorderStyle.DASHED)
+                .separator(BorderStyle.DASHED);
 
         // 设置单元格的左右边框间隔，默认是没有，看起来会有点挤，空间足够时，可以设置为1，看起来清爽
         tableElement.leftCellPadding(1).rightCellPadding(1);
 
         // 设置header
-        tableElement.row(true, fields);
+        if (headers) {
+            tableElement.row(true, fields);
+        }
 
         // 设置cell里的元素超出了处理方式，Overflow.HIDDEN 表示隐藏
         // Overflow.WRAP表示会向外面排出去，即当输出宽度有限时，右边的列可能会显示不出，被挤掉了
@@ -170,7 +253,8 @@ public class TestMarketDataWs2 {
         // 设置第一列输出字体蓝色，红色背景
         // 设置第二列字体加粗，加下划线
         for (Increment increment : increments) {
-            String currency = StringUtils.replace(increment.getSymbol(), baseCurrent, "");//.toUpperCase();
+            // String currency = StringUtils.replace(increment.getSymbol(), QUOTE_CURRENCY, "");//.toUpperCase();
+            String currency = increment.getSymbol();
             tableElement.add(
                     Element.row()
                             .add(Element.label(currency))
@@ -184,8 +268,9 @@ public class TestMarketDataWs2 {
 
         // 默认输出宽度是80
         System.err.println(RenderUtil.render(tableElement, 120));
-        final List<String> symbols = increments.stream().map(Increment::getSymbol).collect(Collectors.toList());
-        log.info("top 10 symbols {}", JSON.toJSONString(symbols));
+        // log.info("涨幅榜：\n" + RenderUtil.render(tableElement, 120));
+        // final List<String> symbols = increments.stream().map(Increment::getSymbol).limit(10).collect(Collectors.toList());
+        // log.info("top 10 symbols {}", JSON.toJSONString(symbols));
     }
 
     private BigDecimal cal(BigDecimal open, BigDecimal close) {
